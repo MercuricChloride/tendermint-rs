@@ -100,7 +100,7 @@ impl<App: Application> Server<App> {
             let (stream, addr) = self.listener.accept().map_err(Error::io)?;
             let addr = addr.to_string();
             info!("Incoming connection from: {}", addr);
-            self.spawn_client_handler_with_inerrupt(stream, addr, rx);
+            self.spawn_client_handler_with_interrupt(stream, addr, rx);
         }
     }
 
@@ -115,7 +115,7 @@ impl<App: Application> Server<App> {
         let _ = thread::spawn(move || Self::handle_client(stream, addr, app, read_buf_size));
     }
 
-    fn spawn_client_handler_with_inerrupt(
+    fn spawn_client_handler_with_interrupt(
         &self,
         stream: TcpStream,
         addr: String,
@@ -166,9 +166,12 @@ impl<App: Application> Server<App> {
         info!("Listening for incoming requests from {}", addr);
         let receiver = receiver;
         loop {
-            if let Ok(_) = &mut receiver.try_recv() {
+            let signal = &mut receiver.try_recv();
+            if let Ok(_) = signal {
                 println!("Shutdown signal received");
                 return;
+            } else {
+                println!("No shutdown signal received yet {signal:?}");
             }
             let request = match codec.next() {
                 Some(result) => match result {
@@ -186,7 +189,9 @@ impl<App: Application> Server<App> {
                     return;
                 },
             };
+            println!("Starting app.handle");
             let response = app.handle(request);
+            println!("Finished app.handle");
             if let Err(e) = codec.send(response) {
                 error!("Failed sending response to client {}: {:?}", addr, e);
                 return;
