@@ -29,7 +29,7 @@ pub type ClientCodec<S> = Codec<S, Response, Request>;
 /// Allows for iteration over `S` to produce instances of `I`, as well as
 /// sending instances of `O`.
 pub struct Codec<S, I, O> {
-    stream: S,
+    pub stream: S,
     // Long-running read buffer
     read_buf: BytesMut,
     // Fixed-length read window

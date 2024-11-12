@@ -168,6 +168,7 @@ impl<App: Application> Server<App> {
         loop {
             let signal = &mut receiver.try_recv();
             if let Ok(_) = signal {
+                codec.stream.shutdown(std::net::Shutdown::Both).unwrap();
                 println!("Shutdown signal received");
                 return;
             } else {
