@@ -2,6 +2,7 @@
 
 use std::{
     net::{TcpListener, TcpStream, ToSocketAddrs},
+    sync::mpsc::{self, channel, Receiver, Sender},
     thread,
 };
 
@@ -82,6 +83,27 @@ impl<App: Application> Server<App> {
         }
     }
 
+    /// Initiate a blocking listener, that shutdowns when an interupt is given
+    pub fn listen_with_interrupt(self, receiver: mpsc::Receiver<()>) -> Result<(), Error> {
+        let mut senders: Vec<Sender<()>> = vec![];
+        let receiver = receiver;
+        loop {
+            if let Ok(_) = &mut receiver.try_recv() {
+                for sender in senders.iter().cloned() {
+                    let _ = sender.send(());
+                }
+                println!("Breaking out of listen loop");
+                return Ok(());
+            }
+            let (tx, rx) = channel();
+            senders.push(tx);
+            let (stream, addr) = self.listener.accept().map_err(Error::io)?;
+            let addr = addr.to_string();
+            info!("Incoming connection from: {}", addr);
+            self.spawn_client_handler_with_inerrupt(stream, addr, rx);
+        }
+    }
+
     /// Getter for this server's local address.
     pub fn local_addr(&self) -> String {
         self.local_addr.clone()
@@ -93,10 +115,61 @@ impl<App: Application> Server<App> {
         let _ = thread::spawn(move || Self::handle_client(stream, addr, app, read_buf_size));
     }
 
+    fn spawn_client_handler_with_inerrupt(
+        &self,
+        stream: TcpStream,
+        addr: String,
+        receiver: Receiver<()>,
+    ) {
+        let app = self.app.clone();
+        let read_buf_size = self.read_buf_size;
+        let _ = thread::spawn(move || {
+            Self::handle_client_with_interrupt(stream, addr, app, read_buf_size, receiver)
+        });
+    }
+
     fn handle_client(stream: TcpStream, addr: String, app: App, read_buf_size: usize) {
         let mut codec = ServerCodec::new(stream, read_buf_size);
         info!("Listening for incoming requests from {}", addr);
         loop {
+            let request = match codec.next() {
+                Some(result) => match result {
+                    Ok(r) => r,
+                    Err(e) => {
+                        error!(
+                            "Failed to read incoming request from client {}: {:?}",
+                            addr, e
+                        );
+                        return;
+                    },
+                },
+                None => {
+                    info!("Client {} terminated stream", addr);
+                    return;
+                },
+            };
+            let response = app.handle(request);
+            if let Err(e) = codec.send(response) {
+                error!("Failed sending response to client {}: {:?}", addr, e);
+                return;
+            }
+        }
+    }
+    fn handle_client_with_interrupt(
+        stream: TcpStream,
+        addr: String,
+        app: App,
+        read_buf_size: usize,
+        receiver: Receiver<()>,
+    ) {
+        let mut codec = ServerCodec::new(stream, read_buf_size);
+        info!("Listening for incoming requests from {}", addr);
+        let receiver = receiver;
+        loop {
+            if let Ok(_) = &mut receiver.try_recv() {
+                println!("Shutdown signal received");
+                return;
+            }
             let request = match codec.next() {
                 Some(result) => match result {
                     Ok(r) => r,
